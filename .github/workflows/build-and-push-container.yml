@@ -22,7 +22,6 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-server
 
 jobs:
   build-and-push:
@@ -52,6 +51,13 @@ jobs:
             echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
             echo "push_latest=${{ inputs.add_latest }}" >> $GITHUB_OUTPUT
             git checkout "refs/tags/${{ inputs.tag }}"
+
+      - name: Normalize image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          echo "name=$(printf '%s-server' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Log in to GHCR
@@ -71,6 +77,6 @@ jobs:
           file: Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
-            ${{ steps.tag.outputs.sha_tag != '' && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, steps.tag.outputs.sha_tag) || '' }}
-            ${{ steps.tag.outputs.push_latest == 'true' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
+            ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}:${{ steps.tag.outputs.tag }}
+            ${{ steps.tag.outputs.sha_tag != '' && format('{0}/{1}:{2}', env.REGISTRY, steps.image.outputs.name, steps.tag.outputs.sha_tag) || '' }}
+            ${{ steps.tag.outputs.push_latest == 'true' && format('{0}/{1}:latest', env.REGISTRY, steps.image.outputs.name) || '' }}
