@@ -162,18 +162,55 @@ namespace lemon::backends {
         return p == pattern.size();
     }
 
-    // Resolve a '*' wildcard in a release asset filename to the concrete asset
-    // name published for `tag`. Some upstreams embed a component that changes
-    // on every build (e.g. the macOS runner version in sd-cpp's Darwin asset:
-    // sd-...-bin-Darwin-macOS-15.7.7-arm64.zip). Rather than hardcode and chase
-    // that value on every bump, the backend spec carries a '*' placeholder and
-    // we look up the real asset name here via the GitHub Releases API. Returns
-    // the pattern unchanged when it contains no wildcard.
+    // Match a release asset pattern. In addition to the '*' glob above, allow
+    // one simple brace alternation such as {avx2,cpu}. This lets a backend
+    // retain compatibility with historical asset names without broadening a
+    // pattern enough to accidentally select a different backend's archive.
+    static bool asset_pattern_match(const std::string& pattern, const std::string& text) {
+        const size_t open = pattern.find('{');
+        if (open == std::string::npos) {
+            return wildcard_match(pattern, text);
+        }
+
+        const size_t close = pattern.find('}', open + 1);
+        if (close == std::string::npos || close <= open + 1) {
+            return wildcard_match(pattern, text);
+        }
+
+        const std::string prefix = pattern.substr(0, open);
+        const std::string suffix = pattern.substr(close + 1);
+        size_t option_start = open + 1;
+        while (option_start < close) {
+            size_t comma = pattern.find(',', option_start);
+            if (comma == std::string::npos || comma > close) {
+                comma = close;
+            }
+
+            const std::string option = pattern.substr(option_start, comma - option_start);
+            if (wildcard_match(prefix + option + suffix, text)) {
+                return true;
+            }
+            if (comma == close) {
+                break;
+            }
+            option_start = comma + 1;
+        }
+        return false;
+    }
+
+    // Resolve a release asset pattern to the concrete asset name published for
+    // `tag`. Some upstreams embed a component that changes on every build (for
+    // example, the macOS runner version in sd-cpp's Darwin asset), while others
+    // have renamed an asset across releases. The backend spec carries a '*'
+    // placeholder or a simple '{old,new}' alternation and we look up the real
+    // asset name here via the GitHub Releases API. Returns the pattern unchanged
+    // when it contains no pattern syntax.
     static std::string resolve_asset_wildcard(const std::string& repo,
                                               const std::string& tag,
                                               const std::string& pattern,
                                               const BackendSpec& spec) {
-        if (pattern.find('*') == std::string::npos) {
+        if (pattern.find('*') == std::string::npos &&
+            pattern.find('{') == std::string::npos) {
             return pattern;
         }
 
@@ -184,7 +221,7 @@ namespace lemon::backends {
             {"Accept", "application/vnd.github+json"},
         };
 
-        LOG(DEBUG, spec.log_name()) << "Resolving asset wildcard '" << pattern
+        LOG(DEBUG, spec.log_name()) << "Resolving asset pattern '" << pattern
             << "' for " << repo << "@" << tag << " via " << url << std::endl;
 
         utils::HttpResponse resp;
@@ -216,8 +253,8 @@ namespace lemon::backends {
                     continue;
                 }
                 const std::string name = asset["name"].get<std::string>();
-                if (wildcard_match(pattern, name)) {
-                    LOG(INFO, spec.log_name()) << "Resolved asset wildcard '"
+                if (asset_pattern_match(pattern, name)) {
+                    LOG(INFO, spec.log_name()) << "Resolved asset pattern '"
                         << pattern << "' to '" << name << "'" << std::endl;
                     return name;
                 }

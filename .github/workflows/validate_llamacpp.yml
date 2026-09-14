@@ -44,7 +44,32 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          RELEASE=$(gh api repos/ggml-org/llama.cpp/releases/latest --jq '.tag_name')
+          set -euo pipefail
+
+          RELEASE_JSON=$(gh api repos/ggml-org/llama.cpp/releases/latest)
+          RELEASE=$(jq -r '.tag_name' <<<"$RELEASE_JSON")
+          if [[ "$RELEASE" == v* ]]; then
+            NIGHTLY_ASSET_ID=$(jq -r '.assets[] | select(.name == "nightly-tag.txt") | .id' <<<"$RELEASE_JSON")
+            if [[ -z "$NIGHTLY_ASSET_ID" || "$NIGHTLY_ASSET_ID" == "null" ]]; then
+              echo "::error::Stable llama.cpp release '$RELEASE' does not publish nightly-tag.txt." >&2
+              exit 1
+            fi
+
+            NIGHTLY_TAG=$(gh api \
+              -H 'Accept: application/octet-stream' \
+              "repos/ggml-org/llama.cpp/releases/assets/${NIGHTLY_ASSET_ID}" | tr -d '[:space:]')
+            if [[ ! "$NIGHTLY_TAG" =~ ^b[0-9]+$ ]]; then
+              echo "::error::nightly-tag.txt for '$RELEASE' did not contain a valid b<build> tag." >&2
+              exit 1
+            fi
+            RELEASE="$NIGHTLY_TAG"
+            echo "Stable llama.cpp release is a wrapper; using nightly build: $RELEASE"
+          fi
+
+          if [[ ! "$RELEASE" =~ ^b[0-9]+$ ]]; then
+            echo "::error::Resolved llama.cpp release '$RELEASE' is not a binary build tag." >&2
+            exit 1
+          fi
           echo "Latest llama.cpp release: $RELEASE"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
 
